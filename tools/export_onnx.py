@@ -13,6 +13,8 @@ from yolox.exp import get_exp
 from yolox.models.network_blocks import SiLU
 from yolox.utils import replace_module
 
+from tools.model_hook import YOLOXHook
+
 
 def make_parser():
     parser = argparse.ArgumentParser("YOLOX onnx deploy")
@@ -54,6 +56,11 @@ def make_parser():
         action="store_true",
         help="decode in inference or not"
     )
+    parser.add_argument(
+        "--half",
+        action="store_true",
+        help="use fp16 or not"
+    )
 
     return parser
 
@@ -79,17 +86,25 @@ def main():
     ckpt = torch.load(ckpt_file, map_location="cpu")
 
     model.eval()
+    model = model.cuda()
+    
     if "model" in ckpt:
         ckpt = ckpt["model"]
     model.load_state_dict(ckpt)
     model = replace_module(model, nn.SiLU, SiLU)
     model.head.decode_in_inference = args.decode_in_inference
 
+    model_hook = YOLOXHook(model, fp16=args.half)
+    model_hook.register_io_hooks()
+
     logger.info("loading checkpoint done.")
-    dummy_input = torch.randn(args.batch_size, 3, exp.test_size[0], exp.test_size[1])
+    
+    dummy_input = torch.randn(args.batch_size, 3, exp.test_size[0], exp.test_size[1])*255
+    dummy_input = dummy_input.type(torch.uint8)
+    dummy_input = dummy_input.cuda()
 
     torch.onnx._export(
-        model,
+        model_hook,
         dummy_input,
         args.output_name,
         input_names=[args.input],
